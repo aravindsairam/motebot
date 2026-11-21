@@ -1,0 +1,16 @@
+[submodule "sim"]
+	path = sim
+	url = https://github.com/aravindsairam/motebot_sim
+[submodule "app"]
+	path = app
+	url = https://github.com/aravindsairam/motebot_app
+[submodule "ros2_ws/src/motebot_robot"]
+	path = ros2_ws/src/motebot_robot
+	url = https://github.com/aravindsairam/motebot_robot
+[submodule "ros2_ws/src/slam_toolbox"]
+	path = ros2_ws/src/slam_toolbox
+	url = https://github.com/aravindsairam/slam_toolbox
+	branch = humble_lifecycle
+[submodule "ros2_ws/src/frontier_exploration_ros2"]
+	path = ros2_ws/src/frontier_exploration_ros2
+	url = https://github.com/aravindsairam/frontier_exploration_ros2

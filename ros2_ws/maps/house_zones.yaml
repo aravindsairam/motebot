@@ -1,0 +1,12 @@
+# No-go zones of the map 'house', in its map frame (metres). The map frame starts at the dock:
+# x points into the living room, y to the robot's left. Each zone is a list of [x, y] corners.
+#
+# Change them from the app or with 'ros2 run vacuum_mode_manager zones' (add, delete): Nav2 then
+# keeps out of the new zones at once. The mode manager rewrites this file when they change, and
+# the comments below are not kept.
+zones:
+  # The stairwell doorway in the bedroom's north wall and the lowered landing behind it.
+  # The lidar sees it as open floor. The zone starts 25 cm inside the room so the robot's
+  # front edge stays clear of the drop.
+  - name: stairwell
+    polygon: [[4.55, 2.00], [5.65, 2.00], [5.65, 3.30], [4.55, 3.30]]

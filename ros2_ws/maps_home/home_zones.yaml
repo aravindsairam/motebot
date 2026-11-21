@@ -1,0 +1,6 @@
+# No-go zones of one saved map, in its map frame (metres): each zone is a list of [x, y] corners.
+# Written by the mode manager whenever the zones are changed (from the app, or with
+# 'ros2 run vacuum_mode_manager zones'), so comments added by hand are not kept.
+zones:
+  - name: "stairs"
+    polygon: [[4.7, -3.05], [5.8, -3.05], [5.8, -1.75], [4.7, -1.75]]

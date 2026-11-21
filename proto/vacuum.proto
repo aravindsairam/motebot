@@ -1,0 +1,519 @@
+// The messages between the robot's gateway (ros2_ws/src/vacuum_gateway, on the PC) and the
+// Android app (app/). One file, used by both ends.
+//
+// Each WebSocket binary message carries one of these messages behind a 6-byte header:
+//
+//   byte 0      channel: CHANNEL_COMMAND (app -> gateway) or CHANNEL_DATA (gateway -> app)
+//   byte 1      type of the message that follows: a CommandType or a DataType below
+//   bytes 2-5   length of that message in bytes, unsigned, big-endian
+//   bytes 6-    the message
+//
+// Data types below 0x80 are streams: only the newest copy matters, and a phone that connects
+// late is sent the latest copy straight away. 0x80 and above are replies to commands.
+// Adding commands and replies does not change PROTOCOL_VERSION: an older gateway answers an
+// unknown command with RESULT_BAD_REQUEST, and an older app ignores data types it does not know.
+//
+// Rules for changing this file:
+//   * Run tools/gen_proto.sh afterwards. It writes the code for both ends; never edit that code.
+//   * Add fields with new numbers. Never renumber a field or reuse a removed field's number.
+//   * A change that an app already installed cannot read raises PROTOCOL_VERSION. The app refuses
+//     to work with a gateway whose version it does not know, and says so.
+
+syntax = "proto3";
+
+package vacuum.v1;
+
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_VERSION = 1;  // the version described by this file
+}
+
+enum Channel {
+  CHANNEL_COMMAND = 0;  // app -> gateway
+  CHANNEL_DATA = 1;     // gateway -> app
+}
+
+// Types on the command channel. Every command is answered with exactly one Reply, sent to the
+// phone that asked and to no other. Blocks kept free:
+//   0x01-0x0F connection                 0x10-0x1F modes and maps
+//   0x20-0x2F navigation and driving     0x30-0x3F exploration
+//   0x40-0x4F cleaning
+enum CommandType {
+  COMMAND_UNSPECIFIED = 0;
+  COMMAND_PING = 0x01;         // Ping: answered at once by the gateway, to measure the delay
+  COMMAND_CHANGE_MODE = 0x10;  // ChangeMode: answered when the change has finished or failed
+  COMMAND_SAVE_MAP = 0x11;     // SaveMap: answered when the map is saved, or why not
+  COMMAND_SET_NO_GO_ZONES = 0x12;  // SetNoGoZones: answered once the zones are saved and in force, or why not
+  COMMAND_GO_TO = 0x20;        // GoTo: answered once Nav2 has accepted the goal (with its id) or it was refused
+  COMMAND_CANCEL_GOAL = 0x21;  // CancelGoal: answered once Nav2 has taken the cancel
+  COMMAND_DRIVE = 0x22;        // Drive: answered at once; sent 20 times a second while the joystick is held
+  COMMAND_START_EXPLORATION = 0x30;      // StartExploration: answered at once, before the robot changes mode, or why not
+  COMMAND_START_CLEANING = 0x40;         // StartCleaning: answered once the robot has checked and planned the job (about 1 s), or why not
+  COMMAND_PAUSE_CLEANING = 0x41;         // PauseCleaning: pause or resume; answered at once
+  COMMAND_PREVIEW_CLEANING = 0x42;       // PreviewCleaning: answered with Reply.estimate; the rows arrive as CleaningPlan
+  COMMAND_SAVE_CLEANING_PLAN = 0x43;     // SaveCleaningPlan: like SaveMap, RESULT_ALREADY_EXISTS unless replace
+  COMMAND_LIST_CLEANING_PLANS = 0x44;    // ListCleaningPlans: answered with Reply.plans
+  COMMAND_DELETE_CLEANING_PLAN = 0x45;   // DeleteCleaningPlan
+  COMMAND_LIST_CLEANING_HISTORY = 0x46;  // ListCleaningHistory: answered with Reply.history
+  COMMAND_GET_CLEANING_RECORD = 0x47;    // GetCleaningRecord: answered with Reply.record, picture included
+}
+
+// Types on the data channel. Blocks kept free:
+//   0x26-0x2F more about navigation
+//   0x32-0x3F more about exploration    0x43-0x4F more about cleaning
+//   0x81-0xFF replies with more in them than Reply
+enum DataType {
+  DATA_UNSPECIFIED = 0;
+  DATA_HELLO = 0x01;          // Hello: the first message on every connection
+  DATA_HEARTBEAT = 0x02;      // Heartbeat: once a second
+  DATA_ROBOT_STATE = 0x10;    // RobotState: on change, and at least twice a second
+  DATA_SAFETY_STATUS = 0x11;  // SafetyStatus: on change, otherwise twice a second
+  DATA_MAP = 0x20;            // Map: on change, at most once a second; a late phone gets the current one
+  DATA_ROBOT_POSE = 0x21;     // RobotPose: ten times a second, while the robot knows where it is on a map
+  // 0x22 carried the lidar points (LidarPoints) until 2026-11-15; the app no longer shows them.
+  reserved 0x22;
+  DATA_ROUTE = 0x23;          // Route: when Nav2 plans, at most twice a second
+  DATA_NAVIGATION = 0x24;     // NavigationStatus: on change, at most twice a second; repeated every 2 s
+  DATA_NO_GO_ZONES = 0x25;    // NoGoZones: on change; a late phone gets the current ones
+  DATA_EXPLORATION_STATUS = 0x30;  // ExplorationStatus: on change, at least twice a second; a late phone gets the current one
+  DATA_FRONTIERS = 0x31;           // Frontiers: on change, at most twice a second; a late phone gets the current ones
+  DATA_CLEANING_STATUS = 0x40;  // CleaningStatus: on change, at least twice a second; a late phone gets the current one
+  DATA_CLEANING_PLAN = 0x41;    // CleaningPlan: on change; a late phone gets the current one
+  DATA_CLEANED_AREA = 0x42;     // CleanedArea: at most once a second while cleaning; a late phone gets the current one
+  DATA_REPLY = 0x80;          // Reply: the answer to a command
+}
+
+// The first message on every connection.
+message Hello {
+  uint32 protocol_version = 1;  // PROTOCOL_VERSION of the gateway
+  string robot_name = 2;
+  string gateway_version = 3;
+}
+
+// Sent once a second whatever else is happening, so that the app can tell a robot with nothing
+// new to say from a connection that has died.
+message Heartbeat {
+  uint32 sequence = 1;  // 1, 2, 3, ... on each connection
+}
+
+// What the robot is doing. A copy of /robot_state (vacuum_interfaces/msg/RobotState); the
+// meaning of each field is described there. Sent only while the robot publishes it, so its
+// absence means the mode manager is not running.
+message RobotState {
+  string state = 1;                         // the mode: idle, mapping, navigation, ...
+  string previous_state = 2;
+  string reason = 3;                        // why the last change happened
+  bool transitioning = 4;                   // a mode change is in progress
+  repeated string allowed_transitions = 5;  // modes that can be requested right now
+  repeated string faults = 6;               // problems detected right now
+  string current_map = 7;                   // the saved map in use, empty if none
+  double entered_time = 8;                  // when this mode was entered: robot clock, seconds
+  // A map is being made: in mapping, in exploring, and in a failsafe entered from either while the
+  // map is still there. Ask this, not the mode's name, for "would leaving lose the map?" and "is
+  // there a saved map to work on?" (current_map then still names the older saved map).
+  bool making_map = 9;
+}
+
+// The map the robot is using: a copy of /map (nav_msgs/OccupancyGrid). While mapping it grows;
+// otherwise it is the saved map the robot localizes on.
+message Map {
+  uint32 version = 1;    // counts up each time the map changes (restarts with the gateway)
+  uint32 width = 2;      // cells
+  uint32 height = 3;     // cells
+  float resolution = 4;  // metres per cell
+  double origin_x = 5;   // map coordinates (metres) of the outer corner of cell (0, 0)
+  double origin_y = 6;
+  double origin_yaw = 7; // radians; 0 for the maps this robot makes
+  // The cells, row by row from cell (0, 0), rows going up in y (as in OccupancyGrid). Run-length
+  // encoded as pairs of bytes: how many cells in the run minus 1 (0-255), then the cells' value
+  // as a signed byte: -1 unknown, 0 free, up to 100 occupied. Decoded, it has width x height cells.
+  bytes cells_rle = 8;
+}
+
+// Where the robot is on the map: the transform map -> base_link.
+message RobotPose {
+  double stamp = 1;    // robot clock, seconds, of the newest data it is based on
+  double x = 2;        // metres, map coordinates
+  double y = 3;
+  double heading = 4;  // radians: 0 along the map's x axis, counter-clockwise positive
+}
+
+// The route Nav2 has planned for the goal it is driving to: /plan, thinned to a point every 5 cm.
+message Route {
+  double stamp = 1;               // robot clock, seconds, when it was planned
+  repeated sint32 points_cm = 2;  // x0, y0, x1, y1, ... in centimetres, map coordinates, robot first
+}
+
+// How the newest navigation goal is going, whoever sent it (the app, RViz, the docking server
+// or the explorer). From Nav2's navigate_to_pose action: its status and
+// feedback topics.
+message NavigationStatus {
+  enum State {
+    STATE_NONE = 0;       // no goal yet
+    STATE_ACCEPTED = 1;   // accepted, not yet moving
+    STATE_ON_THE_WAY = 2;
+    STATE_CANCELLING = 3;
+    STATE_REACHED = 4;
+    STATE_FAILED = 5;     // Nav2 gave up. Nav2 on ROS 2 Humble does not say why
+    STATE_CANCELLED = 6;
+  }
+  bytes goal_id = 1;              // 16 bytes, as in the Reply to GoTo
+  State state = 2;
+  double distance_remaining = 3;  // metres along the route, while on the way
+}
+
+// The places the robot must never drive into (the stairwell, for example): the zones of the map
+// the robot uses, the same zones Nav2 keeps out of and the cleaning plans go around. Each saved
+// map has its own. Empty when there are none, or when no saved map is in use (while mapping).
+message NoGoZones {
+  message Zone {
+    string name = 1;
+    repeated sint32 points_cm = 2;  // the corners x0, y0, x1, y1, ... in centimetres, map coordinates
+  }
+  repeated Zone zones = 1;
+  string map_name = 2;  // the saved map they belong to; empty: none in use
+}
+
+// ---------------------------------------------------------------- commands (app -> gateway)
+// Field 1 of every command is its request number, chosen by the app. Reading just that field
+// lets the gateway answer even a command it cannot read or does not know.
+message RequestId {
+  uint32 request_id = 1;
+}
+
+message Ping {
+  uint32 request_id = 1;
+}
+
+// Ask the robot for a mode: one of RobotState.allowed_transitions. The robot decides; the
+// gateway only passes the request to /change_state. Idle and failsafe stop the robot, and are
+// never refused for being busy: asked for during another change, they wait for it.
+message ChangeMode {
+  uint32 request_id = 1;
+  string mode = 2;
+}
+
+// Save the map being made (mapping mode only) under a name; the robot then uses it. A name already
+// taken is answered RESULT_ALREADY_EXISTS unless `replace` is set: the app asks the user first.
+message SaveMap {
+  uint32 request_id = 1;
+  string name = 2;     // letters, digits, '-' and '_'
+  bool replace = 3;    // overwrite a saved map of the same name
+}
+
+// Replace the no-go zones of the map in use with this list (an empty list deletes them all).
+// Refused (RESULT_REFUSED, with the reason) while mapping or cleaning, when `map_name` is not the
+// map in use, for a zone that is not a real shape (3 to 20 corners, at least 10 cm across), a
+// missing or repeated name, or a new or moved zone that is outside the map, over the robot or too
+// close to the dock (zones kept as they were are not checked again for those). Once answered OK,
+// the zones are saved with the map, Nav2 keeps out of them, and every phone gets them.
+message SetNoGoZones {
+  uint32 request_id = 1;
+  string map_name = 2;                // the map the phone edited the zones of
+  repeated NoGoZones.Zone zones = 3;  // the complete new list
+}
+
+// Send the robot to a point. The robot must be in navigation mode (the app asks for it first);
+// otherwise the answer is RESULT_NOT_AVAILABLE (Nav2 is not running) or RESULT_REFUSED (it runs, but
+// for a clean or a docking, which a goal of the phone's would fight). The gateway first asks
+// Nav2's planner for a route: when there is none (a wall, unexplored space, a no-go zone, a closed
+// door), the answer is RESULT_REFUSED at once and the robot does not move.
+message GoTo {
+  uint32 request_id = 1;
+  double x = 2;        // metres, map coordinates
+  double y = 3;
+  double heading = 4;  // radians: which way the robot faces when it arrives
+}
+
+// Call off a navigation goal: the one with this id, or every goal if goal_id is empty.
+message CancelGoal {
+  uint32 request_id = 1;
+  bytes goal_id = 2;
+}
+
+// Drive the robot by hand: the joystick. Sent 20 times a second while the joystick is held, and
+// once with zeros when it is let go. The gateway passes it to /cmd_vel, where the safety gate
+// takes it only in manual and mapping modes, clamps it to the base's limits, and stops the robot
+// 0.6 s after the last one. Only one phone drives at a time: another phone's Drive is refused
+// until the driving phone has sent nothing for 1 s.
+message Drive {
+  uint32 request_id = 1;
+  double forward = 2;  // m/s, negative backwards
+  double turn = 3;     // rad/s, counter-clockwise (to the left) positive
+}
+
+// The answer to one command.
+message Reply {
+  enum Result {
+    RESULT_UNSPECIFIED = 0;
+    RESULT_OK = 1;             // done
+    RESULT_REFUSED = 2;        // the robot did not do it: it refused, or tried and failed. `message` says why, in the robot's words
+    RESULT_NOT_AVAILABLE = 3;  // the part of the robot that handles it is not running
+    RESULT_TIMED_OUT = 4;      // no answer from the robot in time; it may still act on the command
+    RESULT_BAD_REQUEST = 5;    // the gateway could not read the command, or does not know its type
+    RESULT_BUSY = 6;           // this phone already has too many commands waiting for an answer
+    RESULT_ERROR = 7;          // the gateway failed while handling it
+    RESULT_ALREADY_EXISTS = 8; // the name is taken (SaveMap); asking again with replace overwrites it
+  }
+  uint32 request_id = 1;  // the command this answers
+  Result result = 2;
+  string message = 3;
+  bytes goal_id = 4;      // GoTo, when accepted: the goal's id (16 bytes), as in NavigationStatus
+  CleaningEstimate estimate = 5;        // PreviewCleaning, SaveCleaningPlan: what the plan will take
+  repeated CleaningPlanInfo plans = 6;  // ListCleaningPlans
+  CleaningHistory history = 7;          // ListCleaningHistory
+  CleaningRecord record = 8;            // GetCleaningRecord, with its picture
+  bool replanned = 9;                   // PreviewCleaning of a saved plan: the map has changed, its rows were planned again
+  uint32 job_id = 10;                   // StartCleaning or StartExploration, when accepted: the job's number, as in
+                                        // CleaningStatus, CleaningPlan, CleanedArea, or ExplorationStatus, Frontiers
+}
+
+// What the safety gate is doing. A copy of /safety_status (vacuum_interfaces/msg/SafetyStatus).
+message SafetyStatus {
+  string source = 1;          // who may drive: none, manual, nav2
+  string blocked_reason = 2;  // why commands are being held at zero; empty when passed through
+  bool cliff = 3;
+  bool bumper = 4;
+  bool off_floor = 5;
+  bool reflex_active = 6;     // backing away from a cliff or a bump
+  repeated string stale = 7;  // inputs the gate has stopped receiving
+}
+
+// ---------------------------------------------------------------- cleaning
+// The robot's cleaning node (ros2_ws/src/vacuum_coverage) plans, drives and records every clean;
+// these messages only carry its requests and reports. Stop is ChangeMode to idle and Dock is
+// ChangeMode to docking: either ends a clean that is running. Areas are in metres, map coordinates.
+
+// What to clean and how. A copy of vacuum_interfaces/msg/CleaningJob.
+message CleaningJob {
+  enum What {
+    WHAT_EVERYTHING = 0;  // all the floor the robot can reach
+    WHAT_AREA = 1;        // inside `area`
+    WHAT_SPOT = 2;        // a 1.5 m square (the robot's spot_size) around (spot_x, spot_y)
+    WHAT_PLAN = 3;        // a saved plan, by name
+  }
+  enum Option {
+    OPTION_DEFAULT = 0;   // the robot's setting
+    OPTION_OFF = 1;
+    OPTION_ON = 2;
+  }
+  What what = 1;
+  repeated double area = 2;  // corners x0, y0, x1, y1, ... metres
+  double spot_x = 3;
+  double spot_y = 4;
+  string plan_name = 5;
+  string direction = 6;      // rows along "x" or "y"; "" for whichever needs fewer turns
+  uint32 passes = 7;         // 1, or 2 for a second pass at right angles; 0 means 1
+  Option edges = 8;          // a pass along walls and furniture after the rows (default: off)
+  Option return_to_dock = 9; // dock when finished (default: on)
+}
+
+// What a plan will take, worked out before the robot moves.
+message CleaningEstimate {
+  uint32 rows = 1;
+  uint32 edges = 2;
+  uint32 turns = 3;
+  uint32 transits = 4;
+  float distance = 5;          // m
+  float planned_area = 6;      // m2 of floor the plan passes over
+  float left_out_area = 7;     // m2 it could reach but leaves (row ends, bits too small for a row)
+  float unreachable_area = 8;  // m2 the robot cannot get to from where it is
+  float time = 9;              // s, expected
+}
+
+// How the cleaning job is going: a copy of /cleaning/status. Every number comes from where the
+// robot has really been. After a job ends it keeps saying how that job ended until the next one.
+// A late phone may hold an older job's CleaningPlan or CleanedArea: show them only when their
+// job_id equals this one's (a preview's plan has job_id 0).
+message CleaningStatus {
+  enum State {
+    STATE_NONE = 0;      // no job since the robot's cleaning node started
+    STATE_STARTING = 1;  // accepted and planned: switching to cleaning mode, waiting for navigation
+    STATE_CLEANING = 2;
+    STATE_PAUSED = 3;
+    STATE_FINISHED = 4;
+    STATE_STOPPED = 5;
+    STATE_FAILED = 6;    // `message` says why
+    STATE_ENDING = 7;    // over: handing over to the next mode (going to the dock, or idle)
+  }
+  State state = 1;
+  string message = 2;        // "row 12 of 31", or how it ended: "cleaned 21.0 m² (96%) in 14 min"
+  uint32 job_id = 3;
+  string target = 4;         // "everything", "area", "spot", or the saved plan's name
+  CleaningJob job = 5;
+  double started = 6;        // seconds since 1970
+  float coverage = 7;        // percent of the planned floor cleaned
+  float cleaned_area = 8;    // m2
+  float planned_area = 9;    // m2
+  float distance = 10;       // m
+  float cleaning_time = 11;  // s, paused time not counted
+  float time_left = 12;      // s, estimated
+  uint32 rows_done = 13;
+  uint32 rows_total = 14;
+  uint32 rows_skipped = 15;
+  uint32 current_row = 16;   // being driven or next; 0 when none are left
+  uint32 edges_done = 17;
+  uint32 edges_total = 18;
+  uint32 edges_skipped = 19;
+  uint32 current_edge = 20;
+  uint32 bumps = 21;
+  uint32 pauses = 22;
+  uint32 piece = 23;         // index in CleaningPlan.pieces of the piece being driven; those before it are done
+}
+
+// The rows of the job running, or of the last preview: /cleaning/plan. When a job ends an empty
+// plan (job_id 0, no pieces) is sent, so the rows disappear.
+message CleaningPlan {
+  enum Kind {
+    KIND_ROW = 0;        // a cleaning pass
+    KIND_CONNECTOR = 1;  // the short hop to the next row
+    KIND_TRANSIT = 2;    // a trip Nav2 plans; drawn as nothing, or a faint straight line
+    KIND_EDGE = 3;       // a pass along a wall or furniture
+  }
+  message Piece {
+    Kind kind = 1;
+    sint32 x0_cm = 2;    // centimetres, map coordinates
+    sint32 y0_cm = 3;
+    sint32 x1_cm = 4;
+    sint32 y1_cm = 5;
+    uint32 number = 6;   // rows and edges: their number from 1 (compare with CleaningStatus.current_row)
+    uint32 pass_number = 7;
+  }
+  uint32 job_id = 1;     // the job driving it; 0 for a preview
+  string target = 2;
+  repeated Piece pieces = 3;  // in driving order
+  CleaningEstimate estimate = 4;
+}
+
+// The floor cleaned so far: /cleaning/cleaned, the same size and place as the map.
+message CleanedArea {
+  uint32 job_id = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  float resolution = 4;
+  double origin_x = 5;
+  double origin_y = 6;
+  bytes cells_rle = 7;   // as Map.cells_rle: pairs (run - 1, value); value 100 cleaned, 0 not
+}
+
+message CleaningPlanInfo {
+  string name = 1;
+  CleaningJob job = 2;
+  CleaningEstimate estimate = 3;  // as when it was saved
+  bool map_changed = 4;           // the map has changed since: its rows will be planned again
+  double saved = 5;               // seconds since 1970
+}
+
+message CleaningRecord {
+  string id = 1;
+  double started = 2;          // seconds since 1970
+  double ended = 3;
+  CleaningStatus status = 4;   // as it stood at the end; state is finished, stopped or failed
+  bytes picture_png = 5;       // only from GetCleaningRecord: the map, the cleaned floor tinted, the path driven
+}
+
+message CleaningTotals {
+  uint32 cleans = 1;
+  double area = 2;      // m2
+  double time = 3;      // s
+  double distance = 4;  // m
+}
+
+message CleaningHistory {
+  repeated CleaningRecord records = 1;  // newest first
+  CleaningTotals totals = 2;            // every clean ever recorded on this map
+}
+
+// Start a clean. Answered once the robot has checked and planned it (about a second), before it
+// switches to cleaning mode by itself: RESULT_OK with Reply.job_id and Reply.estimate, or
+// RESULT_REFUSED with the reason (a clean already running, the robot making a map, no saved map,
+// no floor it can reach, an unknown plan). If the mode change then fails, the job ends as failed
+// in CleaningStatus. Cleaning mode cannot be asked for with ChangeMode: only a job enters it.
+message StartCleaning {
+  uint32 request_id = 1;
+  CleaningJob job = 2;
+}
+
+// Pause the clean (the robot stands still, still in cleaning mode), or resume it.
+message PauseCleaning {
+  uint32 request_id = 1;
+  bool resume = 2;
+}
+
+// Plan without moving: the estimate comes in the Reply, the rows as CleaningPlan. With
+// WHAT_PLAN this loads a saved plan (Reply.replanned if its map has changed since).
+message PreviewCleaning {
+  uint32 request_id = 1;
+  CleaningJob job = 2;
+}
+
+message SaveCleaningPlan {
+  uint32 request_id = 1;
+  string name = 2;      // 1 to 40 letters, digits, spaces, '-' and '_'
+  CleaningJob job = 3;  // not WHAT_PLAN
+  bool replace = 4;
+}
+
+message ListCleaningPlans {
+  uint32 request_id = 1;
+}
+
+message DeleteCleaningPlan {
+  uint32 request_id = 1;
+  string name = 2;
+}
+
+message ListCleaningHistory {
+  uint32 request_id = 1;
+  uint32 max_records = 2;  // 0: every record kept (the robot keeps the newest 50)
+}
+
+message GetCleaningRecord {
+  uint32 request_id = 1;
+  string id = 2;
+}
+
+// ---------------------------------------------------------------- exploring
+// The robot maps the house by itself: it drives to the edges of what it has seen until nothing is
+// left to look at, comes back to where it started, and stands still in mapping mode with the map
+// kept, ready to be saved with SaveMap. A copy of /exploration/status.
+message ExplorationStatus {
+  enum State {
+    STATE_NONE = 0;       // no exploration since the robot's exploration node started
+    STATE_STARTING = 1;   // accepted: switching to mapping, then exploring; waiting for navigation
+    STATE_EXPLORING = 2;
+    STATE_RETURNING = 3;  // nothing is left to look at: driving back to where it started
+    STATE_ENDING = 4;     // over: handing back to mapping
+    STATE_FINISHED = 5;   // ended by itself; `message` says how (nothing left, places it could not reach, time limit)
+    STATE_STOPPED = 6;    // stopped (Stop, or another mode was asked for)
+    STATE_FAILED = 7;     // `message` says why
+  }
+  State state = 1;
+  string message = 2;
+  uint32 job_id = 3;
+  double started = 4;         // seconds since 1970
+  uint32 places_left = 5;     // places still to look at
+  float mapped_area = 6;      // m2 of floor on the map so far
+  float exploring_time = 7;   // s of robot time since it began exploring
+  float time_limit = 8;       // s of robot time after which it ends early
+  float distance = 9;         // m driven
+  uint32 goals_sent = 10;     // places the robot was sent to
+  uint32 goals_failed = 11;   // of those, the ones it could not reach
+}
+
+// The places still to look at: /exploration/frontiers. Empty when no exploration is running.
+message Frontiers {
+  uint32 job_id = 1;              // the exploration they belong to; 0 when none runs
+  repeated sint32 points_cm = 2;  // x0, y0, x1, y1, ... in centimetres, map coordinates
+}
+
+// Start an exploration. Answered at once: RESULT_OK with Reply.job_id, or RESULT_REFUSED with the
+// reason (one already running, the robot doing something else). From idle or docked a new map is
+// begun; from mapping the map being made is continued. If a mode change then fails, the
+// exploration ends as failed in ExplorationStatus. Exploring mode cannot be asked for with
+// ChangeMode, and Stop is the ordinary ChangeMode to idle: the robot then stands still in mapping
+// mode with the map kept.
+message StartExploration {
+  uint32 request_id = 1;
+  float time_limit = 2;  // s of robot time; 0: the robot's default (20 minutes)
+}

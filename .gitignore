@@ -1,0 +1,24 @@
+# Output written by the tools and the tests
+logs/
+
+# ROS 2 workspace build output
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+ros2_ws/.cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Maps: only the map each world starts with, and its no-go zones, are kept. Everything else in
+# these folders is written again by mapping, cleaning and the tests.
+ros2_ws/maps/*
+!ros2_ws/maps/house.pgm
+!ros2_ws/maps/house.yaml
+!ros2_ws/maps/house_zones.yaml
+!ros2_ws/maps/current_map.txt
+ros2_ws/maps_home/*
+!ros2_ws/maps_home/home.pgm
+!ros2_ws/maps_home/home.yaml
+!ros2_ws/maps_home/home_zones.yaml
+!ros2_ws/maps_home/current_map.txt
