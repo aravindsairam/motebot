@@ -10,6 +10,9 @@ ros2_ws/.cache/
 __pycache__/
 *.pyc
 
+# The settings changed from the app (the defaults are in the code)
+ros2_ws/robot_settings.yaml
+
 # Maps: only the map each world starts with, and its no-go zones, are kept. Everything else in
 # these folders is written again by mapping, cleaning and the tests.
 ros2_ws/maps/*

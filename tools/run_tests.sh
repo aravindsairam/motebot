@@ -6,6 +6,8 @@
 #   tools/run_tests.sh cleaning   the cleaning phases 18 to 26 (about 75 minutes, half of it phase 20)
 #   tools/run_tests.sh exploring  the exploring phases 28 to 32 (about an hour, half of it phase 30)
 #   tools/run_tests.sh home       the home world's phases 33 and 35 to 39 (about two hours; not part of the everyday run)
+#   tools/run_tests.sh 40         the settings changed from the app (about 10 minutes)
+#   tools/run_tests.sh 41         the chat in the home (about 25 minutes; needs the API key, costs a little)
 # Everything runs headless and without RViz. Whatever is running is stopped first, and
 # everything is stopped again at the end.
 # Full output: logs/tests.log. A one-line result per check is printed as the tests run.
@@ -29,8 +31,10 @@ run() {  # name, needs stack (yes/no), test file, simulator arguments...  (PHASE
     echo "simulator did not start" | tee -a "$OUT"; failed=1; return
   fi
   sleep 3
+  # Every phase starts from the default settings, whatever was last changed from the app.
+  rm -f "$R/logs/test_robot_settings.yaml"
   # STACK_ARGS: more launch arguments for one phase (phase 28 leaves the exploration node out)
-  if [ "$stack" = yes ] && ! "$R/tools/start_stack.sh" rviz:=false $STACK_ARGS >> "$OUT" 2>&1; then
+  if [ "$stack" = yes ] && ! "$R/tools/start_stack.sh" rviz:=false settings_file:="$R/logs/test_robot_settings.yaml" $STACK_ARGS >> "$OUT" 2>&1; then
     echo "robot stack did not start (see logs/stack.log)" | tee -a "$OUT"; failed=1; return
   fi
   ( source /opt/ros/humble/setup.bash
@@ -80,6 +84,8 @@ for phase in "$@"; do
     37) PHASE_WORLD=home TEST_TIMEOUT=6000 run "phase 37: the whole home cleaned" yes sim/tests/phase37_whole_home_test.py ;;
     38) PHASE_WORLD=home run "phase 38: speed in the home" yes sim/tests/phase38_home_speed_test.py ;;
     39) PHASE_WORLD=home run "phase 39: two worlds, one switch" no sim/tests/phase39_world_switch_test.py ;;
+    40) run "phase 40: settings from the app" yes sim/tests/phase40_settings_test.py ;;
+    41) PHASE_WORLD=home TEST_TIMEOUT=5400 run "phase 41: the chat in the home" yes sim/tests/phase41_assistant_test.py ;;
     *) echo "unknown phase '$phase' (use 1 to 33, 35 to 39, cleaning, exploring or home)"; failed=1 ;;
   esac
 done

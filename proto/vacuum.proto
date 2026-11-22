@@ -37,13 +37,16 @@ enum Channel {
 // phone that asked and to no other. Blocks kept free:
 //   0x01-0x0F connection                 0x10-0x1F modes and maps
 //   0x20-0x2F navigation and driving     0x30-0x3F exploration
-//   0x40-0x4F cleaning
+//   0x40-0x4F cleaning                   0x50-0x5F the assistant
 enum CommandType {
   COMMAND_UNSPECIFIED = 0;
   COMMAND_PING = 0x01;         // Ping: answered at once by the gateway, to measure the delay
   COMMAND_CHANGE_MODE = 0x10;  // ChangeMode: answered when the change has finished or failed
   COMMAND_SAVE_MAP = 0x11;     // SaveMap: answered when the map is saved, or why not
   COMMAND_SET_NO_GO_ZONES = 0x12;  // SetNoGoZones: answered once the zones are saved and in force, or why not
+  COMMAND_SET_ROBOT_SETTINGS = 0x13;  // SetRobotSettings: answered once the settings are saved, or why not
+  COMMAND_FIND_ROOMS = 0x14;   // FindRooms: answered with Reply.rooms, a proposal (about a second); nothing is saved
+  COMMAND_SET_ROOMS = 0x15;    // SetRooms: answered once the rooms are saved, or why not; every phone then gets Rooms
   COMMAND_GO_TO = 0x20;        // GoTo: answered once Nav2 has accepted the goal (with its id) or it was refused
   COMMAND_CANCEL_GOAL = 0x21;  // CancelGoal: answered once Nav2 has taken the cancel
   COMMAND_DRIVE = 0x22;        // Drive: answered at once; sent 20 times a second while the joystick is held
@@ -56,6 +59,9 @@ enum CommandType {
   COMMAND_DELETE_CLEANING_PLAN = 0x45;   // DeleteCleaningPlan
   COMMAND_LIST_CLEANING_HISTORY = 0x46;  // ListCleaningHistory: answered with Reply.history
   COMMAND_GET_CLEANING_RECORD = 0x47;    // GetCleaningRecord: answered with Reply.record, picture included
+  COMMAND_ASK_ASSISTANT = 0x50;  // AskAssistant: answered with Reply.answer when the assistant has finished
+                                 // (seconds; minutes if it was asked to drive somewhere); AssistantStatus meanwhile
+  COMMAND_NAME_ROOMS = 0x51;     // NameRooms: answered with Reply.rooms, named by looking (minutes); nothing is saved
 }
 
 // Types on the data channel. Blocks kept free:
@@ -68,6 +74,8 @@ enum DataType {
   DATA_HEARTBEAT = 0x02;      // Heartbeat: once a second
   DATA_ROBOT_STATE = 0x10;    // RobotState: on change, and at least twice a second
   DATA_SAFETY_STATUS = 0x11;  // SafetyStatus: on change, otherwise twice a second
+  DATA_ROBOT_SETTINGS = 0x12; // RobotSettings: on change; a late phone gets the current ones
+  DATA_ROOMS = 0x13;          // Rooms: on change; a late phone gets the current ones
   DATA_MAP = 0x20;            // Map: on change, at most once a second; a late phone gets the current one
   DATA_ROBOT_POSE = 0x21;     // RobotPose: ten times a second, while the robot knows where it is on a map
   // 0x22 carried the lidar points (LidarPoints) until 2026-11-15; the app no longer shows them.
@@ -80,6 +88,7 @@ enum DataType {
   DATA_CLEANING_STATUS = 0x40;  // CleaningStatus: on change, at least twice a second; a late phone gets the current one
   DATA_CLEANING_PLAN = 0x41;    // CleaningPlan: on change; a late phone gets the current one
   DATA_CLEANED_AREA = 0x42;     // CleanedArea: at most once a second while cleaning; a late phone gets the current one
+  DATA_ASSISTANT_STATUS = 0x50; // AssistantStatus: on change, at least twice a second; a late phone gets the current one
   DATA_REPLY = 0x80;          // Reply: the answer to a command
 }
 
@@ -174,6 +183,60 @@ message NoGoZones {
   string map_name = 2;  // the saved map they belong to; empty: none in use
 }
 
+// The settings a user may change: how fast the robot cleans, how fast the joystick drives it, and
+// how the cleaning rows are laid. A copy of /robot_settings (vacuum_interfaces/msg/RobotSettings).
+// The robot keeps them, so every phone shows the same ones and they outlast a restart.
+message RobotSettings {
+  // What the robot accepts, so the app's controls need no numbers of their own. Sent by the
+  // gateway; ignored in SetRobotSettings.
+  message Limits {
+    float cleaning_speed_min = 1;  // m/s
+    float cleaning_speed_max = 2;
+    float manual_speed_min = 3;    // m/s
+    float manual_speed_max = 4;
+    float row_spacing_min = 5;     // m
+    float row_spacing_max = 6;
+    float row_spacing_step = 7;    // m: the spacing is a whole number of these
+  }
+  float cleaning_speed = 1;  // m/s on the rows and edges of a clean. A clean under way changes speed at once.
+  float manual_speed = 2;    // m/s with the joystick pushed all the way
+  float row_spacing = 3;     // m between cleaning rows; applies from the next plan
+  bool row_angle_auto = 4;   // true: in each room, whichever way needs fewer turns
+  float row_angle = 5;       // degrees from the map's x axis, 0 up to (not including) 180; used when not auto
+  Limits limits = 6;
+  float manual_turn_speed = 7;  // rad/s with the joystick pushed all the way to one side: follows manual_speed
+}
+
+// The rooms of the map in use: a copy of /rooms (vacuum_interfaces/msg/Rooms). Found from the map
+// (split at its doorways) and named by the user or by the robot. Empty when there are none yet.
+message Rooms {
+  message Room {
+    string name = 1;
+    repeated sint32 points_cm = 2;  // the outline: x0, y0, x1, y1, ... in centimetres, map coordinates
+    sint32 x_cm = 3;                // the room's most open spot: where the robot goes to visit it
+    sint32 y_cm = 4;
+    float area = 5;                 // m2 of floor
+  }
+  repeated Room rooms = 1;
+  string map_name = 2;
+}
+
+// What the assistant is doing: a copy of /assistant/status. A phone shows it under its own
+// question (same conversation) while it waits for the answer.
+message AssistantStatus {
+  bool busy = 1;
+  string conversation = 2;
+  string doing = 3;  // a few words ("going to the kitchen"); empty when not busy
+}
+
+// The assistant's answer, in Reply.answer.
+message AssistantAnswer {
+  string text = 1;
+  repeated string tools_used = 2;  // what it looked at or did, in order (get_status, go_to_room, look, ...)
+  bytes picture_jpeg = 3;          // a picture that goes with the answer (what the camera saw); empty if none
+  repeated sint32 mark_cm = 4;     // a place on the map that goes with it: x, y in centimetres; empty if none
+}
+
 // ---------------------------------------------------------------- commands (app -> gateway)
 // Field 1 of every command is its request number, chosen by the app. Reading just that field
 // lets the gateway answer even a command it cannot read or does not know.
@@ -213,6 +276,46 @@ message SetNoGoZones {
   repeated NoGoZones.Zone zones = 3;  // the complete new list
 }
 
+// Change the settings: the complete new set (`limits` and `manual_turn_speed` are ignored). Refused
+// (RESULT_REFUSED, with the reason) when a value is outside its limits; nothing is changed then.
+// Once answered OK they are saved on the robot and every phone gets them.
+message SetRobotSettings {
+  uint32 request_id = 1;
+  RobotSettings settings = 2;
+}
+
+// Split the map in use into rooms. Answered with Reply.rooms: a proposal, not saved. Names of saved
+// rooms that match are kept; new ones are "Room 1", "Room 2", ...
+message FindRooms {
+  uint32 request_id = 1;
+}
+
+// Replace the rooms of the map in use with this list (empty deletes them all). Refused when
+// `map_name` is not the map in use, or a name is missing, longer than 40 or repeated.
+message SetRooms {
+  uint32 request_id = 1;
+  string map_name = 2;
+  repeated Rooms.Room rooms = 3;
+}
+
+// Ask the assistant something in plain words. `conversation` is chosen by the app: the same one
+// carries a conversation on, a new one starts afresh. RESULT_OK with Reply.answer; RESULT_REFUSED
+// (with the reason in `message`, and in answer.text) when it could not answer: no API key, no
+// internet, or a question already being answered in that conversation.
+message AskAssistant {
+  uint32 request_id = 1;
+  string conversation = 2;
+  string text = 3;
+}
+
+// Name rooms by looking: the robot drives to each room, takes a picture and names it (a few
+// minutes; AssistantStatus says which room). Answered with Reply.rooms, the same rooms named; not
+// saved. Needs a saved map, navigation and an API key.
+message NameRooms {
+  uint32 request_id = 1;
+  repeated Rooms.Room rooms = 2;
+}
+
 // Send the robot to a point. The robot must be in navigation mode (the app asks for it first);
 // otherwise the answer is RESULT_NOT_AVAILABLE (Nav2 is not running) or RESULT_REFUSED (it runs, but
 // for a clean or a docking, which a goal of the phone's would fight). The gateway first asks
@@ -234,7 +337,8 @@ message CancelGoal {
 // Drive the robot by hand: the joystick. Sent 20 times a second while the joystick is held, and
 // once with zeros when it is let go. The gateway passes it to /cmd_vel, where the safety gate
 // takes it only in manual and mapping modes, clamps it to the base's limits, and stops the robot
-// 0.6 s after the last one. Only one phone drives at a time: another phone's Drive is refused
+// 0.6 s after the last one. The gateway first holds it to RobotSettings.manual_speed and
+// manual_turn_speed, so the app scales the joystick to those. Only one phone drives at a time: another phone's Drive is refused
 // until the driving phone has sent nothing for 1 s.
 message Drive {
   uint32 request_id = 1;
@@ -266,6 +370,8 @@ message Reply {
   bool replanned = 9;                   // PreviewCleaning of a saved plan: the map has changed, its rows were planned again
   uint32 job_id = 10;                   // StartCleaning or StartExploration, when accepted: the job's number, as in
                                         // CleaningStatus, CleaningPlan, CleanedArea, or ExplorationStatus, Frontiers
+  AssistantAnswer answer = 11;          // AskAssistant
+  Rooms rooms = 12;                     // FindRooms, NameRooms: the rooms proposed
 }
 
 // What the safety gate is doing. A copy of /safety_status (vacuum_interfaces/msg/SafetyStatus).
@@ -291,6 +397,7 @@ message CleaningJob {
     WHAT_AREA = 1;        // inside `area`
     WHAT_SPOT = 2;        // a 1.5 m square (the robot's spot_size) around (spot_x, spot_y)
     WHAT_PLAN = 3;        // a saved plan, by name
+    WHAT_ROOM = 4;        // a room of the map, by name (Rooms)
   }
   enum Option {
     OPTION_DEFAULT = 0;   // the robot's setting
@@ -302,10 +409,12 @@ message CleaningJob {
   double spot_x = 3;
   double spot_y = 4;
   string plan_name = 5;
-  string direction = 6;      // rows along "x" or "y"; "" for whichever needs fewer turns
+  string direction = 6;      // "": the robot's setting (RobotSettings). "auto": whichever needs fewer turns.
+                             // "x", "y", or degrees from the map's x axis as a number ("45"): rows that way
   uint32 passes = 7;         // 1, or 2 for a second pass at right angles; 0 means 1
   Option edges = 8;          // a pass along walls and furniture after the rows (default: off)
   Option return_to_dock = 9; // dock when finished (default: on)
+  string room = 10;          // WHAT_ROOM: the room's name
 }
 
 // What a plan will take, worked out before the robot moves.

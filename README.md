@@ -11,7 +11,9 @@ A robot vacuum cleaner, built from scratch and tested fully in simulation. It ha
 - **Cleans.** Neat back and forth rows, one room at a time, around furniture and no-go zones.
 - **Docks.** It drives home and parks on its charger, within half a centimetre.
 - **Stays safe.** It stops at stairs and backs away from bumps, whoever is driving.
-- **Has an app.** Live map, camera, joystick and cleaning controls on an Android phone.
+- **Knows the rooms.** It splits the map at the doorways, drives to each room and names it by looking.
+- **Talks.** Ask in your own words: "clean the kitchen", "go to the sofa", "is the bedroom clean?"
+- **Has an app.** Live map, camera, joystick, chat and cleaning controls on an Android phone.
 
 Every feature has a test that checks the robot against what is really true in the simulator.
 
@@ -34,9 +36,17 @@ git clone --recursive https://github.com/aravindsairam/motebot
 cd motebot/ros2_ws
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths src --ignore-src -y
-pip3 install --user 'websockets>=13' 'protobuf>=6.31' aiortc aiohttp
+pip3 install --user 'websockets>=13' 'protobuf>=6.31' aiortc aiohttp 'anthropic>=0.93' torch transformers
 colcon build --symlink-install
 cd ..
+```
+
+The chat needs an Anthropic API key, kept in a file only you can read:
+
+```bash
+mkdir -p ~/.config/motebot
+nano ~/.config/motebot/anthropic_api_key   # paste the key and save
+chmod 600 ~/.config/motebot/anthropic_api_key
 ```
 
 ## Run
@@ -55,6 +65,7 @@ source ros2_ws/install/setup.bash
 ros2 run vacuum_mode_manager mode navigation    # then pick a goal in RViz with "2D Goal Pose"
 ros2 run vacuum_coverage clean                  # clean the whole home, then dock
 ros2 run vacuum_exploration explore             # make a new map without help
+ros2 run vacuum_assistant ask "what do you see?"  # chat with the robot
 tools/stop_all.sh                               # stop everything
 ```
 
