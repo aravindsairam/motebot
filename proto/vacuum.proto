@@ -47,6 +47,7 @@ enum CommandType {
   COMMAND_SET_ROBOT_SETTINGS = 0x13;  // SetRobotSettings: answered once the settings are saved, or why not
   COMMAND_FIND_ROOMS = 0x14;   // FindRooms: answered with Reply.rooms, a proposal (about a second); nothing is saved
   COMMAND_SET_ROOMS = 0x15;    // SetRooms: answered once the rooms are saved, or why not; every phone then gets Rooms
+  COMMAND_EDIT_ROOMS = 0x16;   // EditRooms: answered with Reply.rooms, the rooms after the change (a proposal); nothing is saved
   COMMAND_GO_TO = 0x20;        // GoTo: answered once Nav2 has accepted the goal (with its id) or it was refused
   COMMAND_CANCEL_GOAL = 0x21;  // CancelGoal: answered once Nav2 has taken the cancel
   COMMAND_DRIVE = 0x22;        // Drive: answered at once; sent 20 times a second while the joystick is held
@@ -298,6 +299,18 @@ message SetRooms {
   repeated Rooms.Room rooms = 3;
 }
 
+// Change the rooms by hand: join two that touch into one, or cut one in two along a line. Give
+// either `join` or `cut_cm`. Answered with Reply.rooms, the whole new list: a proposal like the one
+// FindRooms gives, not saved. RESULT_REFUSED, with the reason, when the two rooms do not touch or
+// the line does not cut a room in two.
+message EditRooms {
+  uint32 request_id = 1;
+  repeated Rooms.Room rooms = 2;  // the rooms as the phone has them now
+  repeated uint32 join = 3;       // two rooms, by their place in `rooms` (from 0): one room, under the bigger one's name
+  repeated sint32 cut_cm = 4;     // x0, y0, x1, y1: a line in a room, carried on to its walls. The bigger part keeps
+                                  // the name; the other comes right after it as "Room n"
+}
+
 // Ask the assistant something in plain words. `conversation` is chosen by the app: the same one
 // carries a conversation on, a new one starts afresh. RESULT_OK with Reply.answer; RESULT_REFUSED
 // (with the reason in `message`, and in answer.text) when it could not answer: no API key, no
@@ -371,7 +384,7 @@ message Reply {
   uint32 job_id = 10;                   // StartCleaning or StartExploration, when accepted: the job's number, as in
                                         // CleaningStatus, CleaningPlan, CleanedArea, or ExplorationStatus, Frontiers
   AssistantAnswer answer = 11;          // AskAssistant
-  Rooms rooms = 12;                     // FindRooms, NameRooms: the rooms proposed
+  Rooms rooms = 12;                     // FindRooms, EditRooms, NameRooms: the rooms proposed
 }
 
 // What the safety gate is doing. A copy of /safety_status (vacuum_interfaces/msg/SafetyStatus).
