@@ -78,7 +78,7 @@ enum DataType {
   DATA_ROBOT_SETTINGS = 0x12; // RobotSettings: on change; a late phone gets the current ones
   DATA_ROOMS = 0x13;          // Rooms: on change; a late phone gets the current ones
   DATA_MAP = 0x20;            // Map: on change, at most once a second; a late phone gets the current one
-  DATA_ROBOT_POSE = 0x21;     // RobotPose: ten times a second, while the robot knows where it is on a map
+  DATA_ROBOT_POSE = 0x21;     // RobotPose: twenty times a second, while the robot knows where it is on a map
   // 0x22 carried the lidar points (LidarPoints) until 2026-11-15; the app no longer shows them.
   reserved 0x22;
   DATA_ROUTE = 0x23;          // Route: when Nav2 plans, at most twice a second
